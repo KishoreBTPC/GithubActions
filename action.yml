@@ -1,0 +1,71 @@
+name: "Docker Image Retag and Push to Nexus"
+description: "Pulls a Docker image, finds the latest tag, retags, and pushes it to a Nexus repository"
+author: "Your Name"
+inputs:
+  image_name:
+    description: "Docker image name (e.g., myregistry.com/myimage)"
+    required: true
+  nexus_registry:
+    description: "Nexus registry URL (e.g., imagehub.cdc.gov)"
+    required: true 
+  nexus_username:
+    description: "Nexus username"
+    required: true
+  nexus_password:
+    description: "Nexus password"
+    required: true
+outputs:
+  new_image_tag:
+    description: "The latest tag of the image that was pushed to Nexus"
+    value: ${{ steps.push_image.outputs.new_tag }}
+runs:
+  using: "composite"
+  steps:
+    - name: "Check Docker CLI availability"
+      run: docker --version
+      shell: bash
+      # This ensures Docker is installed on the runner.
+
+    - name: "Find latest tag for the image"
+      id: get_latest_tag
+      run: |
+        # Get the latest tag (numerical) from the image repository
+        LATEST_TAG=$(curl -s "https://hub.docker.com/v2/repositories/${{ inputs.image_name }}/tags/" \
+          | jq -r '.results[].name' \
+          | grep -E '^[0-9]+(\.[0-9]+)*$' \
+          | sort -Vr | head -n 1)
+        echo "Latest tag found: $LATEST_TAG"
+        echo "latest_tag=$LATEST_TAG" >> $GITHUB_ENV
+      shell: bash
+      # Retrieves the latest numerical tag from Docker Hub.
+
+    - name: "Pull the latest Docker image"
+      run: docker pull ${{ inputs.image_name }}:$LATEST_TAG
+      shell: bash
+      # Pulls the latest version of the given Docker image.
+
+    - name: "Retag image for Nexus repository"
+      run: |
+        NEW_TAG="${{ inputs.nexus_registry }}/${{ inputs.nexus_repo }}/${{ inputs.image_name }}:$LATEST_TAG"
+        echo "New tag: $NEW_TAG"
+        docker tag ${{ inputs.image_name }}:$LATEST_TAG $NEW_TAG
+        echo "new_tag=$NEW_TAG" >> $GITHUB_ENV
+      shell: bash
+      # Retags the image with the Nexus repository format.
+
+    - name: "Log in to Nexus repository"
+      run: echo "${{ inputs.nexus_password }}" | docker login ${{ inputs.nexus_registry }} -u ${{ inputs.nexus_username }} --password-stdin
+      shell: bash
+      # Logs in to the Nexus repository using the provided credentials.
+
+    - name: "Push the image to Nexus repository"
+      id: push_image
+      run: docker push ${{ env.new_tag }}
+      shell: bash
+      # Pushes the newly tagged image to Nexus.
+
+    - name: "Log out from Nexus"
+      run: docker logout ${{ inputs.nexus_registry }}
+      shell: bash
+      # Logs out to prevent credential leakage.
+
